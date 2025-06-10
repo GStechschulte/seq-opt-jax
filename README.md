@@ -1,6 +1,6 @@
 # seq-opt-jax
 
-Sequential Decision Optimization in JAX
+Sequential decision optimization in JAX.
 
 ## Getting Started
 

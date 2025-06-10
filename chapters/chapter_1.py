@@ -770,7 +770,51 @@ def _(
 def _(
     ComplexInventoryParams,
     ComplexPolicyParams,
+    Tuple,
     evaluate_complex_policy_batch,
+    jax,
+    jit,
+    jnp,
+    partial,
+    vmap,
+):
+    @partial(jit, static_argnums=(3, 4))
+    def grid_search_complex_policy(
+        key: jax.random.PRNGKey,
+        inv_params: ComplexInventoryParams,
+        theta_range: jnp.ndarray,
+        num_scenarios: int,
+        num_days: int = 30
+    ) -> Tuple[float, float]:
+        """Vectorized grid search over policy parameters"""
+
+        def evaluate_single_theta(theta):
+            policy_params = ComplexPolicyParams(theta=theta)
+            profits = evaluate_complex_policy_batch(
+                key,
+                policy_params,
+                inv_params,
+                num_scenarios,
+                num_days
+            )
+            return jnp.mean(profits)
+
+        profits = vmap(evaluate_single_theta)(theta_range)
+
+        # Find best theta
+        best_idx = jnp.argmax(profits)
+        best_theta = theta_range[best_idx]
+        best_profit = profits[best_idx]
+
+        return best_theta, best_profit
+    return (grid_search_complex_policy,)
+
+
+@app.cell
+def _(
+    ComplexInventoryParams,
+    ComplexPolicyParams,
+    grid_search_complex_policy,
     jnp,
     random,
 ):
@@ -791,26 +835,19 @@ def _(
         initial_sigma_f=2.0
     )
 
-    complex_policy_params = ComplexPolicyParams(theta=2.0)
+    complex_policy_params = ComplexPolicyParams(theta=3.0)
 
-    # Evaluate policy
-    profits = evaluate_complex_policy_batch(
+    theta_range = jnp.linspace(0, 10, 100)
+
+    theta, profit = grid_search_complex_policy(
         complex_key, 
-        complex_policy_params, 
-        complex_inv_params, 
+        complex_inv_params,
+        theta_range, 
         1000, 
         30
     )
 
-    print(f"Mean profit: {jnp.mean(profits):.2f}")
-    print(f"Std profit: {jnp.std(profits):.2f}")
-    print(f"Min profit: {jnp.min(profits):.2f}")
-    print(f"Max profit: {jnp.max(profits):.2f}")
-    return
-
-
-@app.cell
-def _():
+    print(f"Best theta: {theta:.2f}, profit: {profit:.2f}")
     return
 
 
