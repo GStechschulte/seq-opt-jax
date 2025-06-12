@@ -11,17 +11,20 @@ def _(mo):
 
 
 @app.cell
-def _():
+async def _():
     from dataclasses import dataclass
     from functools import partial
     from typing import NamedTuple, Callable, Tuple
+
+    import micropip
+    await micropip.install("jax")
+    await micropip.install("matplotlib")
 
     import jax
     import jax.numpy as jnp
     from jax import random, jit, vmap, grad
     from jax.scipy.optimize import minimize
     import marimo as mo
-    import numpy as np
     import matplotlib.pyplot as plt
 
     return NamedTuple, Tuple, jax, jit, jnp, mo, partial, random, vmap
@@ -489,7 +492,7 @@ def _(NamedTuple):
         cost_next: float
         epsilon_f: float
         epsilon_D: float
-    
+
 
     class ComplexPolicyParams(NamedTuple):
         """Parameters for the just-enough order policy."""
@@ -550,7 +553,7 @@ def _(
         """
         """
         keys = random.split(key, 3)
-    
+
         def step(carry, key_t):
             sigma_D, sigma_f = carry
             exog = generate_exogenous_samples(key_t, params, sigma_D, sigma_f)
@@ -574,7 +577,7 @@ def _(ComplexPolicyParams, ComplexState, jit, jnp):
         """
         """
         should_order = jnp.maximum(0.0, state.forecast - state.inventory)
-    
+
         return should_order + policy_params.theta
     return (complex_policy,)
 
@@ -592,7 +595,7 @@ def _(ComplexInventoryParams, ComplexState, jit, jnp):
         available_inventory = state.inventory + order_qty
         sales = jnp.minimum(available_inventory, actual_demand)
         contribution = -state.cost * order_qty + params.price * sales
-    
+
         return contribution
     return (complex_contribution,)
 
@@ -628,7 +631,7 @@ def _(ComplexInventoryParams, ComplexState, ExogenousInfo, jit, jnp):
             demand_error ** 2
         )
         new_sigma_D = jnp.sqrt(jnp.maximum(new_sigma_D_sq, 0.01))
-    
+
         forecast_error = state.forecast - new_forecast
         new_sigma_f_sq = (
             (1 - inv_params.alpha) *

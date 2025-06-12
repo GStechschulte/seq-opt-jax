@@ -370,6 +370,15 @@ wheels = [
 ]
 
 [[package]]
+name = "micropip"
+version = "0.9.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/3d/6f/aeef5f7696480704c133206511ff785dd86b76b6eba77391d14de162c1ab/micropip-0.9.0.tar.gz", hash = "sha256:d72c3224537a14e5d9d02f29e945bf7cde02404ec744291e8f6a310cedf60b66", size = 1783814 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/27/6d/195810e3e73e5f351dc6082cada41bb4d5b0746a6804155ba6bae4304612/micropip-0.9.0-py3-none-any.whl", hash = "sha256:babcf68c1849e229aa887564bc5f2de50273c3212e73c9aff8e3e6e80f2b6a23", size = 114896 },
+]
+
+[[package]]
 name = "ml-dtypes"
 version = "0.5.1"
 source = { registry = "https://pypi.org/simple" }
@@ -661,6 +670,7 @@ dependencies = [
     { name = "jax" },
     { name = "marimo" },
     { name = "matplotlib" },
+    { name = "micropip" },
 ]
 
 [package.dev-dependencies]
@@ -673,6 +683,7 @@ requires-dist = [
     { name = "jax", specifier = ">=0.6.1" },
     { name = "marimo", specifier = ">=0.13.15" },
     { name = "matplotlib", specifier = ">=3.10.3" },
+    { name = "micropip", specifier = ">=0.9.0" },
 ]
 
 [package.metadata.requires-dev]
