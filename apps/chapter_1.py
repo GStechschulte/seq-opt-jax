@@ -574,8 +574,7 @@ def _(ComplexPolicyParams, ComplexState, jit, jnp):
         state: ComplexState,
         policy_params: ComplexPolicyParams
     ) -> float:
-        """
-        """
+        """"""
         should_order = jnp.maximum(0.0, state.forecast - state.inventory)
 
         return should_order + policy_params.theta
