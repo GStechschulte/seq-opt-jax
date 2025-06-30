@@ -9,6 +9,7 @@ dependencies = [
     "marimo>=0.13.15",
     "matplotlib>=3.10.3",
     "micropip>=0.9.0",
+    "numpyro>=0.18.0",
 ]
 
 [dependency-groups]
