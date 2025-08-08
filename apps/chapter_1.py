@@ -17,6 +17,7 @@ async def _():
     from typing import NamedTuple, Callable, Tuple
 
     import micropip
+
     await micropip.install("jax")
     await micropip.install("matplotlib")
 
@@ -46,35 +47,40 @@ def _(mo):
 def _(NamedTuple):
     class InventoryParams(NamedTuple):
         """Immutable parameters for the inventory problem."""
-        price: float          # p - selling price per pound
-        cost: float           # c - purchase cost per pound
-        mean_demand: float    # D_bar - mean daily demand
-        std_demand: float     # sigma_D - standard deviation of demand
-        initial_inventory: float = 0.0
 
+        price: float  # p - selling price per pound
+        cost: float  # c - purchase cost per pound
+        mean_demand: float  # D_bar - mean daily demand
+        std_demand: float  # sigma_D - standard deviation of demand
+        initial_inventory: float = 0.0
 
     class PolicyParams(NamedTuple):
         """Parameters for the order-up-to policy."""
-        theta_min: float      # Reorder point
-        theta_max: float      # Order-up-to level
 
+        theta_min: float  # Reorder point
+        theta_max: float  # Order-up-to level
 
     class SimulationState(NamedTuple):
         """State during simulation."""
+
         inventory: float
         total_profit: float
         day: int
+
     return InventoryParams, PolicyParams, SimulationState
 
 
 @app.cell
 def _(InventoryParams, jax, jit, jnp, random):
     @jit
-    def generate_demand_sample(key: jax.random.PRNGKey, params: InventoryParams) -> float:
+    def generate_demand_sample(
+        key: jax.random.PRNGKey, params: InventoryParams
+    ) -> float:
         """Generate a single demand sample from a Normal distribution."""
         demand = random.normal(key, shape=()) * params.std_demand + params.mean_demand
 
         return jnp.maximum(demand, 0.0)
+
     return (generate_demand_sample,)
 
 
@@ -90,11 +96,14 @@ def _(
     vmap,
 ):
     @partial(jit, static_argnums=(2,))
-    def generate_demand_sequence(key: jax.random.PRNGKey, params: InventoryParams, num_days: int) -> jnp.ndarray:
+    def generate_demand_sequence(
+        key: jax.random.PRNGKey, params: InventoryParams, num_days: int
+    ) -> jnp.ndarray:
         """Generate a sequence of demand samples."""
         keys = random.split(key, num_days)
         demands = vmap(lambda k: generate_demand_sample(k, params))(keys)
         return demands
+
     return (generate_demand_sequence,)
 
 
@@ -108,24 +117,26 @@ def _(PolicyParams, jit, jnp):
         """
         should_order = inventory < policy_params.theta_min
         order_quantity = jnp.where(
-            should_order,
-            policy_params.theta_max - inventory,
-            0.0
+            should_order, policy_params.theta_max - inventory, 0.0
         )
 
         return jnp.maximum(order_quantity, 0.0)
+
     return (order_up_to_policy,)
 
 
 @app.cell
 def _(jit, jnp):
     @jit
-    def inventory_transition(inventory: float, order_qty: float, demand: float) -> float:
+    def inventory_transition(
+        inventory: float, order_qty: float, demand: float
+    ) -> float:
         """State transition function from equation.
 
         R_{t+1} = max{0, R_t + x_t - D_{t+1}}
         """
         return jnp.maximum(0.0, inventory + order_qty - demand)
+
     return (inventory_transition,)
 
 
@@ -133,10 +144,7 @@ def _(jit, jnp):
 def _(InventoryParams, jit, jnp):
     @jit
     def single_period_contribution(
-        inventory: float,
-        order_qty: float,
-        demand: float,
-        inv_params: InventoryParams
+        inventory: float, order_qty: float, demand: float, inv_params: InventoryParams
     ) -> float:
         """Single period contribution function."""
         available_inventory = inventory + order_qty
@@ -144,6 +152,7 @@ def _(InventoryParams, jit, jnp):
         contribution = -inv_params.cost * order_qty + inv_params.price * sales
 
         return contribution
+
     return (single_period_contribution,)
 
 
@@ -162,14 +171,16 @@ def _(
         state: SimulationState,
         demand: float,
         policy_params: PolicyParams,
-        inv_params: InventoryParams
+        inv_params: InventoryParams,
     ) -> SimulationState:
         """Single step of the simulation."""
         # Make ordering decision
         order_qty = order_up_to_policy(state.inventory, policy_params)
 
         # Calculate contribution
-        contribution = single_period_contribution(state.inventory, order_qty, demand, inv_params)
+        contribution = single_period_contribution(
+            state.inventory, order_qty, demand, inv_params
+        )
 
         # Update inventory
         new_inventory = inventory_transition(state.inventory, order_qty, demand)
@@ -177,8 +188,9 @@ def _(
         return SimulationState(
             inventory=new_inventory,
             total_profit=state.total_profit + contribution,
-            day=state.day + 1
+            day=state.day + 1,
         )
+
     return (simulation_step,)
 
 
@@ -195,15 +207,11 @@ def _(
 ):
     @jit
     def simulate_episode(
-        demands: jnp.ndarray,
-        policy_params: PolicyParams,
-        inv_params: InventoryParams
+        demands: jnp.ndarray, policy_params: PolicyParams, inv_params: InventoryParams
     ) -> Tuple[float, jnp.ndarray]:
         """Simulate an entire episode given a demand sequence."""
         initial_state = SimulationState(
-            inventory=inv_params.initial_inventory,
-            total_profit=0.0,
-            day=0
+            inventory=inv_params.initial_inventory, total_profit=0.0, day=0
         )
 
         # Use scan for efficient sequential computation
@@ -212,9 +220,12 @@ def _(
 
             return new_state, new_state.inventory
 
-        final_state, inventory_trajectory = jax.lax.scan(step_fn, initial_state, demands)
+        final_state, inventory_trajectory = jax.lax.scan(
+            step_fn, initial_state, demands
+        )
 
         return final_state.total_profit, inventory_trajectory
+
     return (simulate_episode,)
 
 
@@ -232,9 +243,13 @@ def _(
     vmap,
 ):
     @partial(jit, static_argnums=(3, 4))
-    def evaluate_policy_batch(key: jax.random.PRNGKey, policy_params: PolicyParams,
-                             inv_params: InventoryParams, num_scenarios: int,
-                             num_days: int = 30) -> jnp.ndarray:
+    def evaluate_policy_batch(
+        key: jax.random.PRNGKey,
+        policy_params: PolicyParams,
+        inv_params: InventoryParams,
+        num_scenarios: int,
+        num_days: int = 30,
+    ) -> jnp.ndarray:
         """Evaluate policy across multiple scenarios using vectorization."""
         # Generate keys for each scenario
         keys = random.split(key, num_scenarios)
@@ -250,6 +265,7 @@ def _(
         )(demand_sequences)
 
         return profits
+
     return (evaluate_policy_batch,)
 
 
@@ -265,22 +281,25 @@ def _(
 ):
     @partial(jit, static_argnums=(3,))
     def evaluate_policy_stats(
-        key: jax.random.PRNGKey, 
-        policy_params: PolicyParams,                     
-        inv_params: InventoryParams, 
+        key: jax.random.PRNGKey,
+        policy_params: PolicyParams,
+        inv_params: InventoryParams,
         num_scenarios: int,
-        num_days: int = 30
+        num_days: int = 30,
     ) -> dict:
         """Evaluate policy and return statistics."""
-        profits = evaluate_policy_batch(key, policy_params, inv_params, num_scenarios, num_days)
+        profits = evaluate_policy_batch(
+            key, policy_params, inv_params, num_scenarios, num_days
+        )
 
         return {
-            'mean_profit': jnp.mean(profits),
-            'std_profit': jnp.std(profits),
-            'min_profit': jnp.min(profits),
-            'max_profit': jnp.max(profits),
-            'profits': profits
+            "mean_profit": jnp.mean(profits),
+            "std_profit": jnp.std(profits),
+            "min_profit": jnp.min(profits),
+            "max_profit": jnp.max(profits),
+            "profits": profits,
         }
+
     return
 
 
@@ -303,7 +322,7 @@ def _(
         theta_min_range: jnp.ndarray,
         theta_max_range: jnp.ndarray,
         num_scenarios: int,
-        num_days: int = 30
+        num_days: int = 30,
     ) -> Tuple[float, float, float]:
         """Vectorized grid search policy evaluation."""
         # Create pairwise combinations of thetas
@@ -314,7 +333,9 @@ def _(
 
         def evaluate_single_policy(theta_min, theta_max):
             policy_params = PolicyParams(theta_min=theta_min, theta_max=theta_max)
-            profits = evaluate_policy_batch(key, policy_params, inv_params, num_scenarios, num_days)
+            profits = evaluate_policy_batch(
+                key, policy_params, inv_params, num_scenarios, num_days
+            )
 
             return jnp.where(theta_max > theta_min, jnp.mean(profits), -jnp.inf)
 
@@ -327,6 +348,7 @@ def _(
         best_profit = profits[best_idx]
 
         return best_theta_min, best_theta_max, best_profit
+
     return (grid_search_policies,)
 
 
@@ -337,15 +359,13 @@ def _(InventoryParams, grid_search_policies, jnp, random):
     key, subkey = random.split(key)
 
     inv_params = InventoryParams(
-        price=8.0,
-        cost=5.0,
-        mean_demand=20.0,
-        std_demand=5.0,
-        initial_inventory=0.0
+        price=8.0, cost=5.0, mean_demand=20.0, std_demand=5.0, initial_inventory=0.0
     )
 
     theta_min_range = jnp.linspace(0, 2 * inv_params.mean_demand, 8)
-    theta_max_range = jnp.linspace(inv_params.mean_demand, 3 * inv_params.mean_demand, 8)
+    theta_max_range = jnp.linspace(
+        inv_params.mean_demand, 3 * inv_params.mean_demand, 8
+    )
 
     best_theta_min, best_theta_max, best_profit = grid_search_policies(
         subkey, inv_params, theta_min_range, theta_max_range, 200, 30
@@ -466,11 +486,12 @@ def _(mo):
 def _(NamedTuple):
     class ComplexInventoryParams(NamedTuple):
         """Immutable parameters for the inventory problem."""
-        price: float          # p - selling price per pound
-        mean_cost: float           # c - purchase cost per pound
+
+        price: float  # p - selling price per pound
+        mean_cost: float  # c - purchase cost per pound
         std_cost: float
-        mean_demand: float    # D_bar - mean daily demand
-        std_demand: float     # sigma_D - standard deviation of demand
+        mean_demand: float  # D_bar - mean daily demand
+        std_demand: float  # sigma_D - standard deviation of demand
         std_forecast: float
         alpha: float = 0.1
         initial_inventory: float = 0.0
@@ -481,22 +502,23 @@ def _(NamedTuple):
 
     class ComplexState(NamedTuple):
         """Dynamic state variable S_t for the complex inventory problem"""
-        inventory: float # R_inv_t
-        cost: float # c_t
-        forecast: float # f^D_{t,t+1}
-        sigma_D: float # Current estimate of demand std
-        sigma_f: float # Current estimate of forecast std
 
+        inventory: float  # R_inv_t
+        cost: float  # c_t
+        forecast: float  # f^D_{t,t+1}
+        sigma_D: float  # Current estimate of demand std
+        sigma_f: float  # Current estimate of forecast std
 
     class ExogenousInfo(NamedTuple):
         cost_next: float
         epsilon_f: float
         epsilon_D: float
 
-
     class ComplexPolicyParams(NamedTuple):
         """Parameters for the just-enough order policy."""
+
         theta: float
+
     return (
         ComplexInventoryParams,
         ComplexPolicyParams,
@@ -509,13 +531,12 @@ def _(NamedTuple):
 def _(ComplexInventoryParams, ExogenousInfo, jax, jit, jnp, random):
     @jit
     def generate_exogenous_samples(
-        key: jax.random.PRNGKey, 
+        key: jax.random.PRNGKey,
         params: ComplexInventoryParams,
         sigma_D: float,
-        sigma_f: float
+        sigma_f: float,
     ) -> ExogenousInfo:
-        """Generates a single sample of exogenous information W_{t+1}
-        """
+        """Generates a single sample of exogenous information W_{t+1}"""
         key1, key2, key3 = random.split(key, 3)
 
         # Purchase cost for the next period
@@ -527,10 +548,9 @@ def _(ComplexInventoryParams, ExogenousInfo, jax, jit, jnp, random):
         epsilon_D = random.normal(key3) * sigma_D
 
         return ExogenousInfo(
-            cost_next=cost_next,
-            epsilon_f=epsilon_f,
-            epsilon_D=epsilon_D
+            cost_next=cost_next, epsilon_f=epsilon_f, epsilon_D=epsilon_D
         )
+
     return (generate_exogenous_samples,)
 
 
@@ -548,10 +568,9 @@ def _(
         key: jax.random.PRNGKey,
         params: ComplexInventoryParams,
         initial_state: ComplexState,
-        num_days: int
+        num_days: int,
     ) -> Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
-        """
-        """
+        """ """
         keys = random.split(key, 3)
 
         def step(carry, key_t):
@@ -564,6 +583,7 @@ def _(
         _, exog_sequence = jax.lax.scan(step, initial_carry, keys)
 
         return exog_sequence.cost_next, exog_sequence.epsilon_f, exog_sequence.epsilon_D
+
     return (generate_exogenous_sequence,)
 
 
@@ -571,13 +591,13 @@ def _(
 def _(ComplexPolicyParams, ComplexState, jit, jnp):
     @jit
     def complex_policy(
-        state: ComplexState,
-        policy_params: ComplexPolicyParams
+        state: ComplexState, policy_params: ComplexPolicyParams
     ) -> float:
         """"""
         should_order = jnp.maximum(0.0, state.forecast - state.inventory)
 
         return should_order + policy_params.theta
+
     return (complex_policy,)
 
 
@@ -588,7 +608,7 @@ def _(ComplexInventoryParams, ComplexState, jit, jnp):
         state: ComplexState,
         order_qty: float,
         actual_demand: float,
-        params: ComplexInventoryParams
+        params: ComplexInventoryParams,
     ) -> float:
         """"""
         available_inventory = state.inventory + order_qty
@@ -596,6 +616,7 @@ def _(ComplexInventoryParams, ComplexState, jit, jnp):
         contribution = -state.cost * order_qty + params.price * sales
 
         return contribution
+
     return (complex_contribution,)
 
 
@@ -606,7 +627,7 @@ def _(ComplexInventoryParams, ComplexState, ExogenousInfo, jit, jnp):
         state: ComplexState,
         exog: ExogenousInfo,
         inv_params: ComplexInventoryParams,
-        order_qty: float
+        order_qty: float,
     ) -> ComplexState:
         """"""
         # Actual demand update
@@ -624,20 +645,14 @@ def _(ComplexInventoryParams, ComplexState, ExogenousInfo, jit, jnp):
         # Actual and forecasted demand uncertainty update
         demand_error = state.forecast - actual_demand
         new_sigma_D_sq = (
-            (1 - inv_params.alpha) * 
-            state.sigma_D ** 2 + 
-            inv_params.alpha * 
-            demand_error ** 2
-        )
+            1 - inv_params.alpha
+        ) * state.sigma_D**2 + inv_params.alpha * demand_error**2
         new_sigma_D = jnp.sqrt(jnp.maximum(new_sigma_D_sq, 0.01))
 
         forecast_error = state.forecast - new_forecast
         new_sigma_f_sq = (
-            (1 - inv_params.alpha) *
-            state.sigma_f ** 2 +
-            inv_params.alpha *
-            forecast_error ** 2
-        )
+            1 - inv_params.alpha
+        ) * state.sigma_f**2 + inv_params.alpha * forecast_error**2
         new_sigma_f = jnp.sqrt(jnp.maximum(new_sigma_f_sq, 0.01))
 
         return ComplexState(
@@ -645,8 +660,9 @@ def _(ComplexInventoryParams, ComplexState, ExogenousInfo, jit, jnp):
             cost=new_cost,
             forecast=new_forecast,
             sigma_D=new_sigma_D,
-            sigma_f=new_sigma_f
+            sigma_f=new_sigma_f,
         )
+
     return (complex_transition,)
 
 
@@ -670,7 +686,7 @@ def _(
         epsilons_f: jnp.ndarray,
         epsilons_D: jnp.ndarray,
         policy_params: ComplexPolicyParams,
-        inv_params: ComplexInventoryParams
+        inv_params: ComplexInventoryParams,
     ) -> Tuple[float, jnp.ndarray]:
         """"""
         # Initialize state
@@ -679,15 +695,13 @@ def _(
             cost=inv_params.initial_cost,
             forecast=inv_params.initial_forecast,
             sigma_D=inv_params.initial_sigma_D,
-            sigma_f=inv_params.initial_sigma_f
+            sigma_f=inv_params.initial_sigma_f,
         )
 
         def step(state, exog_tuple):
             cost_next, epsilon_f_next, epsilon_D_next = exog_tuple
             exog = ExogenousInfo(
-                cost_next=cost_next,
-                epsilon_f=epsilon_f_next,
-                epsilon_D=epsilon_D_next
+                cost_next=cost_next, epsilon_f=epsilon_f_next, epsilon_D=epsilon_D_next
             )
 
             # Make decision using policy
@@ -698,7 +712,9 @@ def _(
             actual_demand = jnp.maximum(actual_demand, 0.0)
 
             # Compute contribution
-            contribution = complex_contribution(state, order_qty, actual_demand, inv_params)
+            contribution = complex_contribution(
+                state, order_qty, actual_demand, inv_params
+            )
 
             # Transition to next state
             new_state = complex_transition(state, exog, inv_params, order_qty)
@@ -707,13 +723,14 @@ def _(
 
         exog_sequence = (costs, epsilons_f, epsilons_D)
 
-        final_state, (contributions, inventory_trajectory, demand_trajectory) = jax.lax.scan(
-            step, initial_state, exog_sequence
+        final_state, (contributions, inventory_trajectory, demand_trajectory) = (
+            jax.lax.scan(step, initial_state, exog_sequence)
         )
 
         total_profit = jnp.sum(contributions)
 
         return total_profit, inventory_trajectory
+
     return (simulate_complex_episode,)
 
 
@@ -737,7 +754,7 @@ def _(
         policy_params: ComplexPolicyParams,
         inv_params: ComplexInventoryParams,
         num_scenarios: int,
-        num_days: int = 30
+        num_days: int = 30,
     ) -> jnp.ndarray:
         # Initial state for generating exogenous sequences
         initial_state = ComplexState(
@@ -745,13 +762,15 @@ def _(
             cost=inv_params.initial_cost,
             forecast=inv_params.initial_forecast,
             sigma_D=inv_params.initial_sigma_D,
-            sigma_f=inv_params.initial_sigma_f
+            sigma_f=inv_params.initial_sigma_f,
         )
 
         keys = random.split(key, 3)
 
         def generate_scenario(key_scenario):
-            return generate_exogenous_sequence(key_scenario, inv_params, initial_state, num_days)
+            return generate_exogenous_sequence(
+                key_scenario, inv_params, initial_state, num_days
+            )
 
         cost_seq, epsilon_f_seq, epsilon_D_seq = vmap(generate_scenario)(keys)
 
@@ -765,6 +784,7 @@ def _(
         profits = vmap(simulate_scenario)(cost_seq, epsilon_f_seq, epsilon_D_seq)
 
         return profits
+
     return (evaluate_complex_policy_batch,)
 
 
@@ -786,18 +806,14 @@ def _(
         inv_params: ComplexInventoryParams,
         theta_range: jnp.ndarray,
         num_scenarios: int,
-        num_days: int = 30
+        num_days: int = 30,
     ) -> Tuple[float, float]:
         """Vectorized grid search over policy parameters"""
 
         def evaluate_single_theta(theta):
             policy_params = ComplexPolicyParams(theta=theta)
             profits = evaluate_complex_policy_batch(
-                key,
-                policy_params,
-                inv_params,
-                num_scenarios,
-                num_days
+                key, policy_params, inv_params, num_scenarios, num_days
             )
             return jnp.mean(profits)
 
@@ -809,6 +825,7 @@ def _(
         best_profit = profits[best_idx]
 
         return best_theta, best_profit
+
     return (grid_search_complex_policy,)
 
 
@@ -834,7 +851,7 @@ def _(
         initial_cost=5.0,
         initial_forecast=20.0,
         initial_sigma_D=5.0,
-        initial_sigma_f=2.0
+        initial_sigma_f=2.0,
     )
 
     complex_policy_params = ComplexPolicyParams(theta=3.0)
@@ -842,11 +859,7 @@ def _(
     theta_range = jnp.linspace(0, 10, 100)
 
     theta, profit = grid_search_complex_policy(
-        complex_key, 
-        complex_inv_params,
-        theta_range, 
-        1000, 
-        30
+        complex_key, complex_inv_params, theta_range, 1000, 30
     )
 
     print(f"Best theta: {theta:.2f}, profit: {profit:.2f}")

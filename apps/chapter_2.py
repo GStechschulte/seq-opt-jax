@@ -24,6 +24,7 @@ def _():
     import marimo as mo
     import matplotlib.pyplot as plt
     from scipy.optimize import minimize
+
     return (
         Callable,
         NamedTuple,
@@ -47,15 +48,15 @@ def _(mo):
 @app.cell
 def _(NamedTuple):
     class State(NamedTuple):
-        holding: int # Whether we are holding the stock or not (0 = no, 1 = yes)
-        price: float # If we sell, the price per share we recieve
+        holding: int  # Whether we are holding the stock or not (0 = no, 1 = yes)
+        price: float  # If we sell, the price per share we recieve
         smoothed_price: float = 0.0
 
     class Decision(NamedTuple):
-        sell: int # 0 = hold, 1 = sell
+        sell: int  # 0 = hold, 1 = sell
 
     class Exogenous(NamedTuple):
-        price_change: float # Change in price from previous period
+        price_change: float  # Change in price from previous period
         initial_price_mu: float = 50.0
         initial_price_std: float = 5.0
 
@@ -65,31 +66,28 @@ def _(NamedTuple):
         theta_high: float = 60.0
         theta_track: float = 5.0
         alpha: float = 0.1
+
     return Decision, Exogenous, Policy, State
 
 
 @app.cell
 def _(jax, jnp, random):
     def generate_price_change(
-        key: jax.random.PRNGKey,
-        shape: tuple,
-        sigma: float = 1.0
+        key: jax.random.PRNGKey, shape: tuple, sigma: float = 1.0
     ) -> jnp.ndarray:
         """Price changes represent an incremental amount to be added to the
         current price to get a new price"""
         price_change = random.normal(key, shape) * sigma
 
         return price_change
+
     return (generate_price_change,)
 
 
 @app.cell
 def _(Decision, Exogenous, State):
     def transition(
-        state: State, 
-        decision: Decision, 
-        exog: Exogenous,
-        alpha: float = 0.1
+        state: State, decision: Decision, exog: Exogenous, alpha: float = 0.1
     ) -> State:
         """"""
         # Update choice and prices
@@ -98,10 +96,9 @@ def _(Decision, Exogenous, State):
         next_smoothed_price = (1 - alpha) * state.smoothed_price + alpha * next_price
 
         return State(
-            holding=choice,
-            price=next_price,
-            smoothed_price=next_smoothed_price
+            holding=choice, price=next_price, smoothed_price=next_smoothed_price
         )
+
     return (transition,)
 
 
@@ -116,6 +113,7 @@ def _(Decision, State, jit):
     def is_valid_decision(state: State, decision: Decision) -> bool:
         """"""
         return decision.sell <= state.holding
+
     return (contribution,)
 
 
@@ -129,31 +127,27 @@ def _(Callable, Decision, Policy, State, jnp, predictive_sell_low_policy):
 
         return Decision(sell=sell_decision)
 
-
     def high_low_policy(state: State, policy: Policy, t: int, T: int) -> Decision:
         """Sell if the price goes higher or lower than the high-low thresholds or at a final time period"""
         can_sell = state.holding == 1
         should_sell = (
-            (state.price < policy.theta_low) |
-            (state.price > policy.theta_high) |
-            (t == T - 1)
+            (state.price < policy.theta_low)
+            | (state.price > policy.theta_high)
+            | (t == T - 1)
         )
         sell_decision = jnp.where(can_sell & should_sell, 1, 0)
 
         return Decision(sell=sell_decision)
-
 
     def track_policy(state: State, policy: Policy, t: int, T: int) -> Decision:
         """Sell if the price rises above a tracking signal"""
         can_sell = state.holding == 1
-        should_sell = (
-            (state.price >= state.smoothed_price + policy.theta_track) |
-            (t == T - 1)
+        should_sell = (state.price >= state.smoothed_price + policy.theta_track) | (
+            t == T - 1
         )
         sell_decision = jnp.where(can_sell & should_sell, 1, 0)
 
         return Decision(sell=sell_decision)
-
 
     def get_policy_function(policy_type: str) -> Callable:
         """Return the requested policy function"""
@@ -161,10 +155,11 @@ def _(Callable, Decision, Policy, State, jnp, predictive_sell_low_policy):
             "sell_low": sell_low_policy,
             "high_low": high_low_policy,
             "track": track_policy,
-            "predictive": predictive_sell_low_policy
+            "predictive": predictive_sell_low_policy,
         }
 
         return policies[policy_type]
+
     return (get_policy_function,)
 
 
@@ -181,10 +176,7 @@ def _(
     transition,
 ):
     def simulate_single_path(
-        initial_state: State,
-        price_changes: jnp.ndarray,
-        policy: Policy,
-        T: int
+        initial_state: State, price_changes: jnp.ndarray, policy: Policy, T: int
     ) -> Tuple[float, jnp.ndarray, jnp.ndarray]:
         """Simulate a single sample path under a given policy"""
         policy_fn = get_policy_function(policy.policy_type)
@@ -210,7 +202,9 @@ def _(
         inputs = (price_changes, t_idx)
 
         # Run simulation
-        (final_state, total_reward), trajectory = jax.lax.scan(step, (initial_state, 0.0), inputs)
+        (final_state, total_reward), trajectory = jax.lax.scan(
+            step, (initial_state, 0.0), inputs
+        )
 
         return total_reward, trajectory[0], trajectory[1]
 
@@ -233,22 +227,25 @@ def _(
         T: int,
         initial_price: float,
         policy: Policy,
-        sigma: float = 1.0
+        sigma: float = 1.0,
     ) -> dict:
         """"""
         initial_state = State(holding=1, price=initial_price)
         price_changes = generate_price_change(key, (N, T), sigma)
 
         simulate_vmap = vmap(simulate_single_path, in_axes=(None, 0, None, None))
-        rewards, states, decisions = simulate_vmap(initial_state, price_changes, policy, T)
+        rewards, states, decisions = simulate_vmap(
+            initial_state, price_changes, policy, T
+        )
 
         return {
             "rewards": rewards,
             "mean": jnp.mean(rewards),
             "std": jnp.std(rewards),
             "states": states,
-            "decisions": decisions
+            "decisions": decisions,
         }
+
     return (evaluate_policy,)
 
 
@@ -260,7 +257,7 @@ def _(Policy, Tuple, evaluate_policy, jax):
         N: int = 1_000,
         T: int = 100,
         initial_price: float = 50.0,
-        sigma: float = 1.0
+        sigma: float = 1.0,
     ) -> Tuple[Policy, float]:
         """"""
         from scipy.optimize import minimize
@@ -269,7 +266,9 @@ def _(Policy, Tuple, evaluate_policy, jax):
             if policy_type == "sell_low":
                 policy = Policy(policy_type=policy_type, theta_low=params[0])
             elif policy_type == "high_low":
-                policy = Policy(policy_type=policy_type, theta_low=params[0], theta_high=params[1])
+                policy = Policy(
+                    policy_type=policy_type, theta_low=params[0], theta_high=params[1]
+                )
             elif policy_type == "track":
                 policy = Policy(policy_type=policy_type, theta_track=params[0])
 
@@ -289,22 +288,21 @@ def _(Policy, Tuple, evaluate_policy, jax):
             bounds = [(1.0, 10.0)]
 
         res = minimize(
-            objective,
-            x0,
-            method="L-BFGS-B",
-            bounds=bounds,
-            options={"maxiter": 50}
+            objective, x0, method="L-BFGS-B", bounds=bounds, options={"maxiter": 50}
         )
 
         # Create optimized policy
         if policy_type == "sell_low":
             opt_policy = Policy(policy_type=policy_type, theta_low=res.x[0])
         elif policy_type == "high_low":
-            opt_policy = Policy(policy_type=policy_type, theta_low=res.x[0], theta_high=res.x[1])
+            opt_policy = Policy(
+                policy_type=policy_type, theta_low=res.x[0], theta_high=res.x[1]
+            )
         elif policy_type == "track":
             opt_policy = Policy(policy_type=policy_type, theta_track=res.x[0])
 
         return opt_policy, -res.fun
+
     return (optimize_policy,)
 
 
@@ -331,13 +329,17 @@ def _(N, Policy, T, evaluate_policy, key, optimize_policy):
     results = evaluate_policy(key, N, T, 50.0, policy)
     print("Non-optimized")
     print("=" * 15)
-    print(f"Sell-low policy mean return: {results['mean']:.2f}, theta low = {policy.theta_low}")
+    print(
+        f"Sell-low policy mean return: {results['mean']:.2f}, theta low = {policy.theta_low}"
+    )
 
     # Test policy optimization
     opt_policy, opt_return = optimize_policy(key, "sell_low")
     print("\nOptimized")
     print("=" * 15)
-    print(f"Sell-low policy mean return: {opt_return:.2f}, theta low = {opt_policy.theta_low}")
+    print(
+        f"Sell-low policy mean return: {opt_return:.2f}, theta low = {opt_policy.theta_low}"
+    )
     return policy, results
 
 
@@ -348,13 +350,17 @@ def _(N, Policy, T, evaluate_policy, key, optimize_policy, policy, results):
     hl_results = evaluate_policy(key, N, T, 50.0, hl_policy)
     print("Non-optimized")
     print("=" * 15)
-    print(f"high_low policy mean return: {results['mean']:.2f}, theta low = {policy.theta_low}")
+    print(
+        f"high_low policy mean return: {results['mean']:.2f}, theta low = {policy.theta_low}"
+    )
 
     # Test policy optimization
     hl_opt_policy, hl_opt_return = optimize_policy(key, "high_low")
     print("\nOptimized")
     print("=" * 15)
-    print(f"high_low policy mean return: {hl_opt_return:.2f}, theta low = {hl_opt_policy.theta_low}, theta high = {hl_opt_policy.theta_high}")
+    print(
+        f"high_low policy mean return: {hl_opt_return:.2f}, theta low = {hl_opt_policy.theta_low}, theta high = {hl_opt_policy.theta_high}"
+    )
     return
 
 
@@ -388,6 +394,7 @@ def _():
 
     from numpyro.infer import MCMC, NUTS, Predictive
     from numpyro.contrib.control_flow import scan
+
     return MCMC, NUTS, Predictive, dist, numpyro, scan
 
 
@@ -395,6 +402,7 @@ def _():
 def _(NamedTuple, dataclass, jnp):
     class ARState(NamedTuple):
         """Extended state for AR model"""
+
         holding: int
         price: float
         price_history: jnp.ndarray  # Last k prices for AR model
@@ -404,6 +412,7 @@ def _(NamedTuple, dataclass, jnp):
 
     class ARExogenous(NamedTuple):
         """Exogenous info for AR model"""
+
         noise: float
         ar_params: jnp.ndarray
         noise_std: float = 1.0
@@ -411,12 +420,14 @@ def _(NamedTuple, dataclass, jnp):
     @dataclass
     class ARModelConfig:
         """Configuration for AR model"""
+
         lag_order: int = 2
         noise_std_prior: float = 2.0
         ar_param_prior_std: float = 0.5
 
     class ARPolicy(NamedTuple):
         """Policy that can use AR predictions"""
+
         policy_type: str
         theta_low: float = 30.0
         theta_high: float = 60.0
@@ -425,6 +436,7 @@ def _(NamedTuple, dataclass, jnp):
         prediction_weight: float = 1.0  # How much to weight predictions
         uncertainty_penalty: float = 0.1  # Penalty for uncertainty
         alpha: float = 0.1
+
     return ARModelConfig, ARPolicy, ARState
 
 
@@ -435,7 +447,7 @@ def _(jax, jnp, price_changes, random):
         T: int = 200,
         true_params: jnp.ndarray = jnp.array([0.7, 0.2]),
         noise_std: float = 1.0,
-        initial_price: float = 50.0
+        initial_price: float = 50.0,
     ) -> jnp.ndarray:
         """Simulate data according to an AR(2) process"""
         prices = jnp.zeros(T)
@@ -443,22 +455,20 @@ def _(jax, jnp, price_changes, random):
         prices = prices.at[1].set(initial_price + random.normal(key, ()) * noise_std)
 
         noise_key, _ = random.split(key)
-        noise = random.normal(noise_key, (T - 2, )) * noise_std
+        noise = random.normal(noise_key, (T - 2,)) * noise_std
 
         for t in range(2, T):
-            ar_component = jnp.sum(true_params * price_changes[t - 2: t][::-1])
+            ar_component = jnp.sum(true_params * price_changes[t - 2 : t][::-1])
             prices = prices.at[t].set(ar_component + noise[t - 2])
 
         return prices
+
     return
 
 
 @app.cell
 def _(dist, jnp, numpyro, scan):
-    def ar_price_model(
-        prices: jnp.ndarray,
-        lag_order: int = 2
-    ):
+    def ar_price_model(prices: jnp.ndarray, lag_order: int = 2):
         """NumPyro AR model for price evolution"""
         T = len(prices)
 
@@ -475,16 +485,20 @@ def _(dist, jnp, numpyro, scan):
             next_price_mu = const + jnp.dot(ar_params, lagged_prices)
 
             # Sample the next obs
-            next_price_obs = numpyro.sample("price", dist.Normal(next_price_mu, noise_std))
+            next_price_obs = numpyro.sample(
+                "price", dist.Normal(next_price_mu, noise_std)
+            )
 
             # Update carry
-            new_carry = jnp.concatenate([jnp.array([next_price_obs]), lagged_prices[:-1]])
+            new_carry = jnp.concatenate(
+                [jnp.array([next_price_obs]), lagged_prices[:-1]]
+            )
 
             return new_carry, next_price_mu
 
         # Initial carry contains the first N (lag-order) prices, reversed to align with
         # the AR params
-        init_carry = prices[lag_order - 1::-1]
+        init_carry = prices[lag_order - 1 :: -1]
 
         # The data to be observed by the model starts after the initial lag period.
         observed_prices = prices[lag_order:]
@@ -502,25 +516,26 @@ def _(dist, jnp, numpyro, scan):
 def _(ARModelConfig, MCMC, NUTS, Tuple, ar_price_model, jax, jnp):
     class ARModel:
         """An autoregressive model that makes real-time predictions"""
+
         def __init__(self, config: ARModelConfig):
             self.config = config
             self.posterior_samples = None
 
         def fit(
-            self, 
-            key: jax.random.PRNGKey, 
-            prices: jnp.ndarray, 
+            self,
+            key: jax.random.PRNGKey,
+            prices: jnp.ndarray,
             num_chains=10,
-            num_samples: int = 500, 
-            num_warmup: int = 250
+            num_samples: int = 500,
+            num_warmup: int = 250,
         ):
             """Fit the AR model using NUTS"""
             kernel = NUTS(ar_price_model)
             mcmc = MCMC(
-                kernel, 
-                num_chains=num_chains, 
-                num_warmup=num_warmup, 
-                num_samples=num_samples
+                kernel,
+                num_chains=num_chains,
+                num_warmup=num_warmup,
+                num_samples=num_samples,
             )
             mcmc.run(key, prices, self.config.lag_order)
             self.posterior_samples = mcmc.get_samples()
@@ -531,11 +546,12 @@ def _(ARModelConfig, MCMC, NUTS, Tuple, ar_price_model, jax, jnp):
             self,
             key: jax.random.PRNGKey,
             price_history: jnp.ndarray,
-            num_samples: int = 500
+            num_samples: int = 500,
         ) -> Tuple[float, float]:
             """Predict the next price given the current price history"""
 
             raise NotImplementedError("This method is not implemented...")
+
     return
 
 
@@ -557,7 +573,7 @@ def _(
         decision: Decision,
         exog: Exogenous,
         model,
-        alpha: float = 0.1
+        alpha: float = 0.1,
     ) -> ARState:
         """Transition function that includes the ARModel prediction for the price process"""
         # Update holding
@@ -565,10 +581,9 @@ def _(
         # Current price evolves according to exogenous process
         next_price = state.price + exog.price_change
         # Update price history
-        new_history = jnp.concatenate([
-            state.price_history[1:],
-            jnp.array([next_price])
-        ])
+        new_history = jnp.concatenate(
+            [state.price_history[1:], jnp.array([next_price])]
+        )
         # Make prediction for the price after next_price (t+2 prediction when at t+1)
         pred_key, _ = random.split(key)
         predicted_mu, predicted_std = model.predict(pred_key, new_history)
@@ -582,19 +597,15 @@ def _(
             price_history=new_history,
             predicted_next_price=predicted_price,
             prediction_uncertainty=prediction_std,
-            smoothed_price=next_smoothed_price
+            smoothed_price=next_smoothed_price,
         )
+
     return (predictive_transition,)
 
 
 @app.cell
 def _(ARPolicy, ARState, pred):
-    def predictive_sell_low_policy(
-        state: ARState,
-        policy: ARPolicy,
-        t: int,
-        T: int
-    ):
+    def predictive_sell_low_policy(state: ARState, policy: ARPolicy, t: int, T: int):
         """Sell-low policy that considers next price prediction"""
         can_sell = state.holding == 1
 
@@ -605,7 +616,8 @@ def _(ARPolicy, ARState, pred):
             # If prediction suggests that price will go even lower, sell now
             # Use uncertainty to adjust thresholds
             adjusted_threshold = (
-                policy.theta_low - policy.uncertainty_penalty * state.prediction_uncertainty
+                policy.theta_low
+                - policy.uncertainty_penalty * state.prediction_uncertainty
             )
             prediction_signal = state.predicted_next_price < adjusted_threshold
 
@@ -613,6 +625,7 @@ def _(ARPolicy, ARState, pred):
             should_sell = current_signal | (policy.prediction_weight * pred)
         else:
             should_sell = state.price < policy.theta_low
+
     return (predictive_sell_low_policy,)
 
 
@@ -630,50 +643,52 @@ def _(
     random,
 ):
     def simulate_with_predictions(
-            initial_state: ARState,
-            price_changes: jnp.ndarray,
-            policy: ARPolicy,
-            model,
-            key: jax.random.PRNGKey,
-            T: int
-        ) -> Tuple[float, jnp.ndarray]:
-            """Simulate with real-time AR predictions at each step."""
-            policy_fn = get_policy_function(policy.policy_type)
+        initial_state: ARState,
+        price_changes: jnp.ndarray,
+        policy: ARPolicy,
+        model,
+        key: jax.random.PRNGKey,
+        T: int,
+    ) -> Tuple[float, jnp.ndarray]:
+        """Simulate with real-time AR predictions at each step."""
+        policy_fn = get_policy_function(policy.policy_type)
 
-            def step(carry, inputs):
-                state, total_reward, step_key = carry
-                price_change, t = inputs
+        def step(carry, inputs):
+            state, total_reward, step_key = carry
+            price_change, t = inputs
 
-                # Split key for this step
-                decision_key, pred_key, next_key = random.split(step_key, 3)
+            # Split key for this step
+            decision_key, pred_key, next_key = random.split(step_key, 3)
 
-                # Make decision using current state (which includes prediction)
-                decision = policy_fn(state, policy, t, T)
+            # Make decision using current state (which includes prediction)
+            decision = policy_fn(state, policy, t, T)
 
-                # Compute reward
-                reward = contribution(state, decision)
+            # Compute reward
+            reward = contribution(state, decision)
 
-                # Transition to next state (includes making new prediction)
-                exog = Exogenous(price_change=price_change)
-                next_state = predictive_transition(
-                    state, decision, exog, model, pred_key, policy.alpha
-                )
-
-                return (next_state, total_reward + reward, next_key), (state, decision, reward)
-
-            # Run simulation
-            t_indices = jnp.arange(T)
-            inputs = (price_changes, t_indices)
-            keys = random.split(key, T + 1)
-
-            (final_state, total_reward, _), trajectory = jax.lax.scan(
-                step, 
-                (initial_state, 0.0, keys[0]), 
-                inputs,
-                keys[1:]
+            # Transition to next state (includes making new prediction)
+            exog = Exogenous(price_change=price_change)
+            next_state = predictive_transition(
+                state, decision, exog, model, pred_key, policy.alpha
             )
 
-            return total_reward, trajectory
+            return (next_state, total_reward + reward, next_key), (
+                state,
+                decision,
+                reward,
+            )
+
+        # Run simulation
+        t_indices = jnp.arange(T)
+        inputs = (price_changes, t_indices)
+        keys = random.split(key, T + 1)
+
+        (final_state, total_reward, _), trajectory = jax.lax.scan(
+            step, (initial_state, 0.0, keys[0]), inputs, keys[1:]
+        )
+
+        return total_reward, trajectory
+
     return (simulate_with_predictions,)
 
 
@@ -695,7 +710,7 @@ def _(
         T: int,
         initial_prices: jnp.ndarray,
         policy: ARPolicy,
-        sigma: float = 1.0
+        sigma: float = 1.0,
     ) -> dict:
         """
         Evaluate policy using real-time AR predictions.
@@ -707,17 +722,15 @@ def _(
 
         # Create initial state with prediction
         pred_key, sim_keys = random.split(eval_key)
-        initial_pred, initial_std = model.predict(
-            initial_prices, pred_key
-        )
+        initial_pred, initial_std = model.predict(initial_prices, pred_key)
 
-        initial_state =  ARState(
+        initial_state = ARState(
             holding=1,
             price=initial_prices[-1],
             price_history=initial_prices,
             predicted_next_price=initial_pred,
             prediction_uncertainty=initial_std,
-            smoothed_price=initial_prices[-1]
+            smoothed_price=initial_prices[-1],
         )
 
         # Simulate with predictions
@@ -725,8 +738,7 @@ def _(
 
         def simulate_one_path(path_key, price_changes_path):
             return simulate_with_predictions(
-                initial_state, price_changes_path, policy, 
-                model, path_key, T
+                initial_state, price_changes_path, policy, model, path_key, T
             )[0]  # Just return reward
 
         rewards = jax.vmap(simulate_one_path)(sim_keys_split, price_changes)
@@ -736,6 +748,7 @@ def _(
             "mean": jnp.mean(rewards),
             "std": jnp.std(rewards),
         }
+
     return
 
 
@@ -745,8 +758,8 @@ def _(jnp, random):
     sim_length = 100
     lag_order = 2
     y = jnp.zeros(sim_length + lag_order)
-    y = y.at[0].set(50.)
-    y = y.at[1].set(51.)
+    y = y.at[0].set(50.0)
+    y = y.at[1].set(51.0)
     return lag_order, rng, y
 
 
@@ -755,7 +768,6 @@ def _(Predictive, ar_price_model, lag_order, random, rng, y):
     prior_predictive = Predictive(model=ar_price_model, num_samples=1)
     rng_key, rng_subkey = random.split(rng)
     prior_samples = prior_predictive(rng_subkey, prices=y, lag_order=lag_order)
-
 
     return (prior_samples,)
 

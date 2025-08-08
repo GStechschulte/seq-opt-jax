@@ -5,14 +5,28 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "fastexcel>=0.14.0",
     "jax>=0.6.1",
-    "marimo>=0.13.15",
+    "marimo[lsp]>=0.13.15",
     "matplotlib>=3.10.3",
     "micropip>=0.9.0",
     "numpyro>=0.18.0",
+    "polars>=1.31.0",
 ]
 
 [dependency-groups]
-dev = [
-    "ruff>=0.11.13",
-]
+dev = ["ruff>=0.11.13"]
+
+# Language server configuration
+[tool.marimo.language_servers.pylsp]
+enabled = true            # Enable/disable the Python language server
+enable_mypy = true        # Type checking with mypy (enabled by default, if installed)
+enable_ruff = true        # Linting with ruff (enabled by default, if installed)
+enable_flake8 = false     # Linting with flake8
+enable_pydocstyle = false # Check docstring style
+enable_pylint = false     # Linting with pylint
+enable_pyflakes = false   # Syntax checking with pyflakes
+
+[tool.pyright]
+venvPath = "."
+venv = ".venv"

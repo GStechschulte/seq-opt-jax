@@ -44,7 +44,9 @@ def export_html_wasm(notebook_path: str, output_dir: str, as_app: bool = False) 
     # Configure export mode based on whether it's an app or a notebook
     if as_app:
         print(f"Exporting {notebook_path} to {output_path} as app")
-        cmd.extend(["--mode", "run", "--no-show-code"])  # Apps run in "run" mode with hidden code
+        cmd.extend(
+            ["--mode", "run", "--no-show-code"]
+        )  # Apps run in "run" mode with hidden code
     else:
         print(f"Exporting {notebook_path} to {output_path} as notebook")
         cmd.extend(["--mode", "edit"])  # Notebooks run in "edit" mode
@@ -158,7 +160,9 @@ def main() -> None:
         None
     """
     # Set up command line argument parsing
-    parser: argparse.ArgumentParser = argparse.ArgumentParser(description="Build marimo notebooks")
+    parser: argparse.ArgumentParser = argparse.ArgumentParser(
+        description="Build marimo notebooks"
+    )
     parser.add_argument(
         "--output-dir", default="_site", help="Output directory for built files"
     )
