@@ -1,3 +1,7 @@
+<!--![seq-opt-jax](./docs/seq-opt-jax-logo.png)-->
+
+<img src="/docs/seq-opt-jax-logo.png" style="height: 100px; width:100px;"/>
+
 # seq-opt-jax
 
 Sequential decision optimization in JAX.
