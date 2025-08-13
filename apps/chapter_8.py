@@ -16,17 +16,7 @@ def _(mo):
         r"""
     # 8 - Energy Storage
 
-    There is increased interest in using batteries to take advantage of price spikes, buying power when it is cheap, and selling it back when prices are high. Exploiting the variability in power prices on the grid to buy when prices are low and sell when they are high is known as *battery arbitrage*. 
-
-    Energy storage is a rich and dynamic inventory problem with lots of variations. The problem below will exhibit the following
-
-    * Electricity prices are volatile.
-    * Wind energy can be forecasted. Rolling forecasts are used to update these estimates.
-    * Solar energy exhibits three types of variability: (1) predictable process of the diurnal cycle, (2) presence of sunny and cloudy days, (3) variability of spot clouds that are difficult to predict even an hour into the future.
-    * Energy demand is variable but predictable.
-    * Energy may be bought from or sold to the grid at current grid prices.
-    * Renewable energy may be used to satisfy current demand, stored, or sold back to the grid.
-    * There is a 5-10% conversion loss of power from AC to DC.
+    There is increased interest in using batteries to take advantage of price spikes, buying power when it is cheap, and selling it back when prices are high. Exploiting the variability in power prices on the grid to buy when prices are low and sell when they are high is known as *battery arbitrage*.
     """
     )
     return
@@ -34,6 +24,7 @@ def _(mo):
 
 @app.cell
 def _():
+    import time
     from abc import ABC, abstractmethod
     from dataclasses import dataclass
     from enum import IntEnum
@@ -58,13 +49,9 @@ def _():
     import polars as pl
     import seaborn as sns
     from scipy.optimize import minimize
-
     return (
         ABC,
-        Any,
         Array,
-        Dict,
-        List,
         MCMC,
         NUTS,
         NamedTuple,
@@ -81,8 +68,15 @@ def _():
         random,
         scan,
         sns,
+        time,
         vmap,
     )
+
+
+@app.cell
+def _(plt):
+    plt.style.use("./styles.mplstyle")
+    return
 
 
 @app.cell
@@ -100,7 +94,7 @@ def _(mo):
 @app.cell
 def _(NamedTuple):
     class State(NamedTuple):
-        R_t: float # Amount of energy (mWH) stored in the battery at time t
+        R_t: float # Amount of energy stored in the battery at time t
         p_t: float # Price of energy on the grid at time t
         eta: float = 0.9 # Battery conversion loss factor
 
@@ -110,23 +104,23 @@ def _(NamedTuple):
         hold: float
 
     class Exogenous(NamedTuple):
-        next_price: float # Price change = p_t - p_{t-1}
+        next_price: float
 
     class Policy(NamedTuple):
         theta_buy: float 
         theta_sell: float
-        buy_amount: float = 1.0
-        sell_amount: float = 1.0
+        buy_amount: float = 1.0 # Unit buy increment
+        sell_amount: float = 1.0 # Unit sell increment
 
     class Constraints(NamedTuple):
-        R_max: float = 100 # Maximum battery capacity
+        R_max: float = 100 # Maximum battery capacity (100%)
     return Constraints, Decision, Policy, State
 
 
 @app.cell
-def _(Decision, State):
+def _(Decision, State, jax):
+    @jax.jit
     def contribution(state: State, decision: Decision) -> float:
-        """"""
         return state.p_t * (state.eta * decision.sell - decision.buy)
     return (contribution,)
 
@@ -137,11 +131,9 @@ def _(mo):
         r"""
     ## 8.3 - Modeling uncertainty
 
-    How will we model the electricity prices? We could just an autoregressive model to model the price $p_{t+1}$ as a function of the previous prices
+    How will we model the electricity prices? We will use an autoregressive model to model the price $p_{t+1}$ as a function of the previous prices
 
     $$p_{t+1} = \theta_{t_0}p_t + \theta_{t_1}p_{t-1} + \theta_{t_2}p_{t-2} + \epsilon_{t+1}$$
-
-    where the coefficients can be estimated recursively.
     """
     )
     return
@@ -153,20 +145,21 @@ def _(mo):
         r"""
     ## 8.4 - Designing policies
 
-    We can solve the basic model using: policy search, lookahead policy, and a hybrid policy.
+    We can solve the basic model using: (1) policy search, (2) lookahead policy, and (3) hybrid policy.
 
     ### 8.4.1 - Policy search
 
     #### Buy low, sell high
 
-    A buy low, sell high policy works by charging the battery when the price falls below a lower limit, and selling when the price goes above an upper limit.
+    A buy low, sell high policy works by buying energy to charge the battery when the price falls below a lower limit, and selling when the price goes above an upper limit.
     """
     )
     return
 
 
 @app.cell
-def _(Constraints, Decision, Policy, State, jnp):
+def _(Constraints, Decision, Policy, State, jax, jnp):
+    @jax.jit
     def buy_low_sell_high(state: State, policy: Policy, constraints: Constraints) -> Decision:
         """A buy-low, sell-high policy.
 
@@ -277,16 +270,15 @@ def _(
                 y_prev, y_prev_prev = carry
                 # AR process
                 m_t = const + alpha_1 * y_prev + alpha_2 * y_prev_prev
-                # Sample the next value `numpyro.handlers.condition` will use observed data
-                # where available and sample for future steps
+                # `numpyro.handlers.condition` will use observed data where available and 
+                # call numpyro.sample for future steps where observed data is not available
                 y_t = numpyro.sample("y", dist.Normal(m_t, sigma))
                 return (y_t, y_prev), m_t
 
             timesteps = jnp.arange(y.shape[0] - 2 + future)
             init = (y[1], y[0]) # Initial values are first two timesteps
 
-            # Use handler to condition on observed data. For future time steps,
-            # where y has not been observed, NumPyro will sample from the distribution
+            # Use handler to condition on observed data
             with numpyro.handlers.condition(data={"y": y[2:]}):
                 _, mu = scan(transition, init, timesteps)
 
@@ -306,7 +298,6 @@ def _(
         ):
             rng_key, rng_subkey = random.split(key=key)
 
-            # Initialize NUTS sampler
             nuts_kernel = NUTS(self.model, **nuts_kwargs)
             mcmc = MCMC(
                 nuts_kernel,
@@ -316,7 +307,6 @@ def _(
                 progress_bar=False
             )
 
-            # Run MCMC and store posterior samples
             mcmc.run(rng_subkey, *model_args)
             self.posterior_samples = mcmc.get_samples()
 
@@ -422,14 +412,14 @@ def _(Array, NamedTuple):
 
 
 @app.cell
-def _(Constraints, Decision, State, jnp):
+def _(Constraints, Decision, State, jax, jnp):
+    @jax.jit
     def transition(
         state: State,
         decision: Decision,
         constraints: Constraints,
         next_price: float
     ) -> State:
-        """"""
         # Energy update
         new_energy = state.R_t + (state.eta * decision.buy) - decision.sell
         constrained_energy = jnp.clip(new_energy, 0.0, constraints.R_max)
@@ -453,14 +443,13 @@ def _(
     jnp,
     transition,
 ):
+    @jax.jit
     def simulate_policy(
         price_path: Array,
         policy: Policy,
         initial_state: State,
         constraints: Constraints
     ) -> float:
-        """
-        """
 
         def step(carry, price_info):
             state, total_reward = carry
@@ -481,8 +470,6 @@ def _(
             return (next_state, total_reward + reward), (current_state, decision, reward)
 
         initial_total_reward = jnp.array([0.0])
-
-        # Price pairs are...
         price_pairs = jnp.column_stack([price_path[:-1], price_path[1:]])
 
         (final_state, total_reward), trajectory = jax.lax.scan(
@@ -496,14 +483,14 @@ def _(
 
 
 @app.cell
-def _(Array, Constraints, Policy, Result, State, simulate_policy, vmap):
+def _(Array, Constraints, Policy, Result, State, jax, simulate_policy, vmap):
+    @jax.jit
     def evaluate_policy(
         sample_paths: Array,
         policy: Policy,
         state: State,
         constraints: Constraints,
     ) -> Result:
-        """"""
         simulate_vmap = vmap(simulate_policy, in_axes=(0, None, None, None))
         rewards, states, decisions = simulate_vmap(sample_paths, policy, state, constraints)
 
@@ -516,117 +503,95 @@ def _(Array, Constraints, Policy, Result, State, simulate_policy, vmap):
 
 
 @app.cell
-def _(Array, jnp):
-    def analyze_decisions(decisions: Array):
-        """Analyze the frequency of each decision type across all simulations.
+def _(Array, Tuple, jnp):
+    def create_parameter_grid(
+        buy_min: float,
+        buy_max: float,
+        sell_min: float,
+        sell_max: float,
+        step: float
+    ) -> Tuple[Array, Array]:
+        buy_values = jnp.arange(buy_min, buy_max, step)
+        sell_values = jnp.arange(sell_min, sell_max, step)
+        buy_grid, sell_grid = jnp.meshgrid(buy_values, sell_values, indexing="ij")
+        buy_grid, sell_grid = buy_grid.flatten(), sell_grid.flatten()
 
-        Parameters
-        ----------
-        decisions_array: Array
-            Shape (num_simulations, num_timesteps, 3) where last dim is [buy, sell, hold].
+        # Sell price should not be below the buy price
+        valid_mask = buy_grid < sell_grid
+        valid_buy, valid_sell = buy_grid[valid_mask], sell_grid[valid_mask]
 
-        Returns
-        -------
-        Dictionary with decision frequencies and statistics
-        """
-        # shape = (n_samples x n_timesteps x batch)
-        total = jnp.array(decisions.sell.shape[1])
-
-        buy_count = jnp.sum(decisions.buy, axis=1).flatten()
-        sell_count = jnp.sum(decisions.sell, axis=1).flatten() 
-        hold_count = jnp.sum(decisions.hold, axis=1).flatten()
-
-        return {
-            "buy_frequency": buy_count / total,
-            "sell_frequency": sell_count / total,
-            "hold_frequency": hold_count / total,
-            "buy_count": buy_count,
-            "sell_count": sell_count,
-            "hold_count": hold_count
-        }
-    return (analyze_decisions,)
+        return valid_buy, valid_sell
+    return (create_parameter_grid,)
 
 
 @app.cell
-def _(Array):
-    def analyze_states(states: Array):
-        """
-        """
-        mean_battery_capacity = states.R_t.mean(axis=0).flatten()
-        std_battery_capacity = states.R_t.std(axis=0).flatten()
-
-        return {
-            "mean_battery_capacity": mean_battery_capacity,
-            "std_battery_capacity": std_battery_capacity,
-        }
-    return (analyze_states,)
-
-
-@app.cell
-def _(
-    Any,
-    Array,
-    Constraints,
-    Dict,
-    List,
-    Policy,
-    State,
-    Tuple,
-    analyze_decisions,
-    analyze_states,
-    evaluate_policy,
-    jnp,
-):
+def _(Array, Constraints, Policy, State, evaluate_policy, jax, jnp, time):
     def grid_search(
         sample_paths: Array,
+        buy_values: Array,
+        sell_values: Array,
         state: State,
-        thresholds: List,
         constraints: Constraints,
-    ) -> Tuple[Policy, Dict[str, Any]]:
-        """"""
-        best_performance = -jnp.inf
-        best_params = None
-        all_results = []
-        result_records = {}
+    ):
+        n_combinations = len(buy_values)
 
-        print("Running grid search")
-        print("===================")
-    
-        for theta in thresholds:
-            theta_buy = theta[0]
-            theta_sell = theta[1]
-            if theta_buy >= theta_sell:
-                continue
+        def evaluate_pair(theta_buy, theta_sell):
+            policy = Policy(theta_buy, theta_sell)
+            res = evaluate_policy(sample_paths, policy, state, constraints)
 
-            print(f"theta buy: {theta_buy}, theta sell: {theta_sell}")
-        
-            policy = Policy(theta_buy=theta_buy, theta_sell=theta_sell)
-            results = evaluate_policy(sample_paths, policy, state, constraints)
+            total_timesteps = res.decisions.buy.shape[1]
+            buy_count = jnp.sum(res.decisions.buy, axis=1).flatten()
+            sell_count = jnp.sum(res.decisions.sell, axis=1).flatten() 
+            hold_count = jnp.sum(res.decisions.hold, axis=1).flatten()
 
-            decision_stats = analyze_decisions(results.decisions)
-            states_stats = analyze_states(results.states)
+            decision_stats = {
+                "buy_frequency": buy_count / total_timesteps,
+                "sell_frequency": sell_count / total_timesteps,
+                "hold_frequency": hold_count / total_timesteps,
+                "buy_count": buy_count,
+                "sell_count": sell_count,
+                "hold_count": hold_count
+            }
 
-            thetas = (int(theta_buy), int(theta_sell))
+            states_stats = {
+                "mean_battery_capacity": res.states.R_t.mean(axis=0).flatten(),
+                "std_battery_capacity": res.states.R_t.std(axis=0).flatten(),
+            }
 
-            result_records[thetas] = {
-                "mean_cumsum_reward": results.rewards.mean().flatten()[0],
-                "std_cumsum_reward": results.rewards.std().flatten()[0],
+            return {
+                "mean_cumsum_reward": res.rewards.mean().flatten()[0],
+                "std_cumsum_reward": res.rewards.std().flatten()[0],
                 **decision_stats,
                 **states_stats
             }
 
-        return result_records
+        start = time.time()
+        evaluate = jax.vmap(evaluate_pair, in_axes=(0, 0))
+        res = evaluate(buy_values, sell_values)
+        end = time.time()
+
+        print(f"Simulation completed in: {(end - start):.2f} sec.")
+
+        return res
     return (grid_search,)
 
 
 @app.cell
-def _(Constraints, State, grid_search, jnp, pps, y_train):
+def _(
+    Constraints,
+    State,
+    create_parameter_grid,
+    grid_search,
+    jnp,
+    pps,
+    y_train,
+):
     posterior_predictive_samples = pps["mu"]
 
     max_capacity = 100.
-    init_capacity = 50.
+    init_capacity = 50. # 50% charge
 
-    initial_battery_charge = jnp.array([init_capacity]) # 80% charge
+    initial_battery_charge = jnp.array([init_capacity])
     initial_price = float(y_train[0])
     initial_state = State(
         R_t=initial_battery_charge, 
@@ -635,27 +600,28 @@ def _(Constraints, State, grid_search, jnp, pps, y_train):
     )
     init_constraints = Constraints(R_max=max_capacity)
 
-    # Define search grid
-    buy_thresholds = jnp.arange(10, 60, 1) 
-    sell_thresholds = jnp.arange(10, 60, 1)
-    thresholds = [(x, y) for x in buy_thresholds for y in sell_thresholds]
+    buy_min = 10.
+    buy_max = 100.
+    sell_min = 10.
+    sell_max = 100.
+    step = 1
+
+    buy_values, sell_values = create_parameter_grid(buy_min, buy_max, sell_min, sell_max, step)
 
     res = grid_search(
-        posterior_predictive_samples,
-        initial_state,
-        thresholds,
+        posterior_predictive_samples, 
+        buy_values, 
+        sell_values, 
+        initial_state, 
         init_constraints
     )
-    return posterior_predictive_samples, res
+    return buy_values, res, sell_values
 
 
-@app.function
-def parse_key(k):
-    if isinstance(k, tuple):
-        return k
-    k = k.strip().strip("()")
-    a, b = k.split(",")
-    return (int(a), int(b))
+@app.cell
+def _(res):
+    res
+    return
 
 
 @app.function
@@ -665,12 +631,27 @@ def ticks_every_k(vals, k):
 
 
 @app.cell
-def _(Result, pl, plt, res, sns):
-    def plot_contribution_heatmap(result: Result, metric: str, **kwargs):
+def _(pl, plt, sns):
+    def plot_contribution_heatmap(
+        vectorized_results, 
+        buy_values, 
+        sell_values, 
+        metric: str, 
+        **kwargs
+    ):
+        n_combinations = len(buy_values)
+
         rows = []
-        for k, vals in res.items():
-            a, b = parse_key(k)
-            rows.append({"param1": a, "param2": b, metric: float(vals[metric])})
+        for i in range(n_combinations):
+            theta_buy = int(buy_values[i])
+            theta_sell = int(sell_values[i])
+            metric_value = float(vectorized_results[metric][i])
+
+            rows.append({
+                "param1": theta_buy, 
+                "param2": theta_sell, 
+                metric: metric_value
+            })
 
         df = pl.DataFrame(rows)
 
@@ -698,12 +679,10 @@ def _(Result, pl, plt, res, sns):
         matrix = matrix[::-1, :]
         y_labels = y_labels[::-1]
 
-        # # Plot with seaborn
         plt.figure(figsize=(8, 6))
         ax = sns.heatmap(
             matrix, 
             annot=False, 
-            cmap="viridis",
             xticklabels=x_labels, 
             yticklabels=y_labels
         )
@@ -714,13 +693,11 @@ def _(Result, pl, plt, res, sns):
         x_index_by_value = {v: i for i, v in enumerate(x_vals)}
         y_index_by_value = {v: i for i, v in enumerate(y_vals)}
 
-        # X axis
         x_tick_vals = ticks_every_k(x_vals, 2)
         x_tick_pos = [x_index_by_value[v] for v in x_tick_vals if v in x_index_by_value]
         ax.set_xticks(x_tick_pos)
         ax.set_xticklabels([str(v) for v in x_tick_vals if v in x_index_by_value])
 
-        # Y axis
         y_tick_vals = ticks_every_k(y_vals, 2)
         y_tick_pos = [y_index_by_value[v] for v in y_tick_vals if v in y_index_by_value]
         ax.set_yticks(y_tick_pos)
@@ -730,68 +707,59 @@ def _(Result, pl, plt, res, sns):
         ax.set_ylabel("Buy")
 
         title = kwargs.get("title", None)
-
         plt.title(title)
-        plt.tight_layout()
         plt.show()
     return (plot_contribution_heatmap,)
 
 
 @app.cell
-def _(plot_contribution_heatmap, res):
-    plot_contribution_heatmap(res, "mean_cumsum_reward", title="Average Cumulative Reward")
-    return
-
-
-@app.cell
-def _(plot_contribution_heatmap, res):
-    plot_contribution_heatmap(res, "std_cumsum_reward", title="Cumulative Reward Uncertainty")
-    return
-
-
-@app.cell
-def _(Result, pl, plt, posterior_predictive_samples, res):
-    def plot_battery_capacity(result: Result, metric: str, **kwargs):
-        rows = []
-        for k, vals in res.items():
-            a, b = parse_key(k)
-            arr = [float(val) for val in vals[metric]]
-            rows.append(
-                {
-                    "theta_pair": f"{k}", 
-                    metric: arr
-                }
-            )
-    
-        df = pl.DataFrame(rows)
-        mean_bc = df.explode(metric)
-        t = range(1, posterior_predictive_samples[0].shape[0])
-
-        unique_thetas = mean_bc.select("theta_pair").unique().to_numpy()
+def _(plt):
+    def plot_battery_capacity(
+        vectorized_results, 
+        buy_values, 
+        sell_values, 
+        metric: str, 
+        **kwargs
+    ):
+        n_combinations = len(buy_values)
 
         plt.figure(figsize=(16, 6))
-        for theta in unique_thetas:
-            theta_df = mean_bc.filter(pl.col("theta_pair") == theta)
 
-            plt.plot(
-                t, 
-                theta_df.select("mean_battery_capacity").to_numpy().flatten()
-            )
+        for i in range(0, n_combinations, max(1, n_combinations // 20)):  # Plot every Nth combination
+            theta_buy = int(buy_values[i])
+            theta_sell = int(sell_values[i])
+
+            capacity_values = vectorized_results[metric][i]
+            t = range(len(capacity_values))
+
+            plt.plot(t, capacity_values, label=f"buy={theta_buy}, sell={theta_sell}", alpha=0.7)
 
         plt.xlabel("Time")
         plt.ylabel("Battery Capacity")
+        plt.title("Battery Capacity Over Time (Sample Parameter Combinations)")
+
+        if n_combinations <= 20:
+            plt.legend()
+
         plt.show()
     return (plot_battery_capacity,)
 
 
 @app.cell
-def _(plot_battery_capacity, res):
-    plot_battery_capacity(res, "mean_battery_capacity")
+def _(buy_values, plot_contribution_heatmap, res, sell_values):
+    plot_contribution_heatmap(res, buy_values, sell_values, "mean_cumsum_reward")
     return
 
 
 @app.cell
-def _():
+def _(buy_values, plot_contribution_heatmap, res, sell_values):
+    plot_contribution_heatmap(res, buy_values, sell_values, "std_cumsum_reward")
+    return
+
+
+@app.cell
+def _(buy_values, plot_battery_capacity, res, sell_values):
+    plot_battery_capacity(res, buy_values, sell_values, "mean_battery_capacity")
     return
 
 
