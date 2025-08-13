@@ -1,6 +1,6 @@
-<!--![seq-opt-jax](./docs/seq-opt-jax-logo.png)-->
-
-<img src="/docs/seq-opt-jax-logo.png" style="height: 100px; width:100px;"/>
+<p align="center">
+  <img src="/docs/seq-opt-jax-logo.png" style="height: 100px; width:125px;"/>
+</p>
 
 # seq-opt-jax
 
