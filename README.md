@@ -2,10 +2,6 @@
   <img src="/docs/seq-opt-jax-logo.png" style="height: 100px; width:125px;"/>
 </p>
 
-# seq-opt-jax
-
-Sequential decision optimization in JAX.
-
 ## Getting Started
 
 Solutions to chapter exercises are in the [apps](./apps/) directory and are hosted on this repositories GitHub pages. Additionally, solutions are implemented with Marimo and are executable as a script or viewable as a notebook.
