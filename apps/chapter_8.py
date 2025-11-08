@@ -1,6 +1,6 @@
 import marimo
 
-__generated_with = "0.14.16"
+__generated_with = "0.14.12"
 app = marimo.App(width="medium")
 
 
@@ -37,6 +37,7 @@ def _():
     import jax
     jax.config.update("jax_num_cpu_devices", 10)
 
+    import numpy as np
     import jax.numpy as jnp
     import numpyro.distributions as dist
     from jax import random, jit, vmap, grad
@@ -62,6 +63,7 @@ def _():
         dist,
         jax,
         jnp,
+        np,
         numpyro,
         pl,
         plt,
@@ -75,7 +77,8 @@ def _():
 
 @app.cell
 def _(plt):
-    plt.style.use("./styles.mplstyle")
+    # plt.style.use("./styles.mplstyle")
+    plt.style.use("default")
     return
 
 
@@ -210,9 +213,15 @@ def _(pl):
 
 
 @app.cell
+def _(rt_lmp):
+    rt_lmp
+    return
+
+
+@app.cell
 def _(plt, rt_lmp):
     plt.figure(figsize=(16, 6))
-    plt.plot(rt_lmp["Day"], rt_lmp["PJM RT LMP"])
+    plt.step(rt_lmp["Day"], rt_lmp["PJM RT LMP"])
     return
 
 
@@ -760,6 +769,162 @@ def _(buy_values, plot_contribution_heatmap, res, sell_values):
 @app.cell
 def _(buy_values, plot_battery_capacity, res, sell_values):
     plot_battery_capacity(res, buy_values, sell_values, "mean_battery_capacity")
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(
+        r"""
+    ## Direct lookahead approximation
+
+    Aka model predictive control (MPC).
+
+    - State variables: $R_t, p_t$
+    - Decision variables: $u_t$
+    """
+    )
+    return
+
+
+@app.cell
+def _():
+    from scipy.optimize import linprog
+    return (linprog,)
+
+
+@app.cell
+def _(np, plt, rt_lmp):
+    T = 48
+    H = 24
+    n_states = 2
+    n_controls = 1
+    R_max = 10
+    R_min = 0
+    alpha = 5
+
+    eta = 0.9 # Discharge efficiency
+    r0 = 5.0 # Initial SoC
+
+    p = rt_lmp.select("PJM RT LMP").to_jax()[:T].flatten()
+    u = np.random.normal(0, 1, (24,))
+
+    plt.figure(figsize=(8, 4))
+    plt.step(range(T), p)
+    plt.show()
+    return H, R_max, alpha, eta, n_controls, n_states, p
+
+
+@app.function
+def objective(u, p):
+    return -p * u
+
+
+@app.cell
+def _(H, R_max, alpha, eta, linprog, np):
+    def solve(R_current, p_forecast):
+        n_vars = H
+    
+        # Coefficient vector is the forecasted prices
+        c = (p_forecast * 1)
+
+        upper_constraint = np.tri(H, H) * eta
+        lower_constraint = np.tri(H, H) * (-eta)
+    
+        A_ub = np.vstack([upper_constraint, lower_constraint])
+        b_ub = np.concatenate([
+            np.full(H, R_max - R_current), # Upper constraint eval
+            np.full(H, R_current) # Lower constraint eval
+        ])
+        bounds = [(-alpha, alpha) for _ in range(n_vars)]
+        
+        res = linprog(
+            c=c,
+            A_ub=A_ub,
+            b_ub=b_ub,
+            A_eq=None,
+            b_eq=None,
+            bounds=bounds,
+            method="highs"
+        )
+
+        return res
+    return (solve,)
+
+
+@app.cell
+def _(H, eta, n_controls, n_states, np, p, solve):
+    # Trajectories
+    x_traj = np.zeros((H, n_states))
+    u_traj = np.zeros((H, n_controls))
+    obj_traj = np.zeros((H,))
+
+    # Initial conditions
+    R_current = 5.0
+    p_current = p[0]
+    total_obj = 0.0
+
+    for k in range(H):
+        p_forecast = p[k: H + k] # Includes the current price
+    
+        out = solve(R_current, p_forecast)
+
+        profit = -out.fun
+        u_opt = out.x
+
+        # Apply first control sequence
+        u_k = u_opt[0]
+
+        # Compute contribution
+        obj = objective(u_k, p_current)
+    
+        # State transition
+        R_current = R_current + (eta * u_k)
+        p_current = p[k + 1]
+    
+        # Cumulative reward
+        total_obj += obj
+
+        # Track trajectories
+        x_traj[k] = np.array([R_current, p_current])
+        u_traj[k] = np.array([u_k])
+        obj_traj[k] = total_obj
+
+        print(
+            f"h: {k}, u: {u_k:.2f}, r: {R_current:.2f}, p: {p_current:.2f}, "
+            f"opt. obj: {profit:.2f}, obj.: {obj:.2f}, cum. obj.: {total_obj:.2f}"
+        )
+    return obj_traj, u_traj, x_traj
+
+
+@app.cell
+def _(H, obj_traj, p, plt, u_traj, x_traj):
+    fig, ax = plt.subplots(nrows=4, ncols=1, sharex=True, figsize=(14, 8))
+
+    _xs = range(len(obj_traj))
+
+    ax[0].step(_xs, obj_traj, label="Reward")
+    ax[1].step(_xs, u_traj, label="Buy/Sell")
+    ax[2].step(_xs, x_traj[:, 0], label="SoC")
+    ax[3].step(_xs, p[:H], label="Price")
+
+    ax[0].set_ylabel("Cumulative Reward")
+    ax[1].set_ylabel("Power (Buy/Sell)")
+    ax[2].set_ylabel("Battery SoC")
+    ax[3].set_ylabel("Electricity Price")
+
+    ax[0].legend()
+    ax[1].legend()
+    ax[2].legend()
+    ax[3].legend()
+
+    plt.tight_layout()
+    plt.show()
+    return
+
+
+@app.cell
+def _():
     return
 
 
