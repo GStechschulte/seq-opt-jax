@@ -812,7 +812,7 @@ def _(np, plt, rt_lmp):
     plt.figure(figsize=(8, 4))
     plt.step(range(T), p)
     plt.show()
-    return H, R_max, alpha, eta, n_controls, n_states, p
+    return H, R_max, alpha, eta, n_controls, n_states, p, u
 
 
 @app.function
@@ -824,20 +824,20 @@ def objective(u, p):
 def _(H, R_max, alpha, eta, linprog, np):
     def solve(R_current, p_forecast):
         n_vars = H
-    
+
         # Coefficient vector is the forecasted prices
         c = (p_forecast * 1)
 
         upper_constraint = np.tri(H, H) * eta
         lower_constraint = np.tri(H, H) * (-eta)
-    
+
         A_ub = np.vstack([upper_constraint, lower_constraint])
         b_ub = np.concatenate([
             np.full(H, R_max - R_current), # Upper constraint eval
             np.full(H, R_current) # Lower constraint eval
         ])
         bounds = [(-alpha, alpha) for _ in range(n_vars)]
-        
+
         res = linprog(
             c=c,
             A_ub=A_ub,
@@ -866,7 +866,7 @@ def _(H, eta, n_controls, n_states, np, p, solve):
 
     for k in range(H):
         p_forecast = p[k: H + k] # Includes the current price
-    
+
         out = solve(R_current, p_forecast)
 
         profit = -out.fun
@@ -877,11 +877,11 @@ def _(H, eta, n_controls, n_states, np, p, solve):
 
         # Compute contribution
         obj = objective(u_k, p_current)
-    
+
         # State transition
         R_current = R_current + (eta * u_k)
         p_current = p[k + 1]
-    
+
         # Cumulative reward
         total_obj += obj
 
@@ -920,6 +920,17 @@ def _(H, obj_traj, p, plt, u_traj, x_traj):
 
     plt.tight_layout()
     plt.show()
+    return
+
+
+@app.cell
+def _(u):
+    u
+    return
+
+
+@app.cell
+def _():
     return
 
 
