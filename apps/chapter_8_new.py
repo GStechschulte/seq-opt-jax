@@ -206,22 +206,21 @@ def _(pl):
         sheet_name="Raw Data"
     )
 
-    rt_lmp = prices.select(["Day", "PJM RT LMP"])
+    rt_lmp = (
+        prices
+            .with_columns(day=pl.col("Day").dt.date())
+            .rename({"Day": "date"})
+            .select(["date", "day", "PJM RT LMP"])
+    )
     y_train = rt_lmp.select("PJM RT LMP").to_jax().flatten()[:180]
     y_test = rt_lmp.select("PJM RT LMP").to_jax().flatten()[-20:]
     return rt_lmp, y_test, y_train
 
 
 @app.cell
-def _(rt_lmp):
-    rt_lmp
-    return
-
-
-@app.cell
 def _(plt, rt_lmp):
     plt.figure(figsize=(16, 6))
-    plt.step(rt_lmp["Day"], rt_lmp["PJM RT LMP"])
+    plt.step(rt_lmp["date"], rt_lmp["PJM RT LMP"])
     return
 
 
@@ -812,7 +811,19 @@ def _(np, plt, rt_lmp):
     plt.figure(figsize=(8, 4))
     plt.step(range(T), p)
     plt.show()
-    return H, R_max, alpha, eta, n_controls, n_states, p, u
+    return H, R_max, alpha, eta, n_controls, n_states, p
+
+
+@app.cell
+def _(np, pl, rt_lmp):
+    N = 5
+    # Must have 24 measurements for reshaping
+    days = rt_lmp.group_by("day").count().filter(pl.col("count") == 24).to_series().sort().to_list()
+    sampled_days = np.random.choice(days, size=N, replace=False)
+    rt_lmp_sampled = rt_lmp.filter(pl.col("day").is_in(sampled_days)).sort("date")
+    p_sampled = rt_lmp_sampled.select("PJM RT LMP").to_numpy().flatten().reshape(N, 24, 1)
+    p_sampled.shape
+    return N, p_sampled
 
 
 @app.function
@@ -826,7 +837,7 @@ def _(H, R_max, alpha, eta, linprog, np):
         n_vars = H
 
         # Coefficient vector is the forecasted prices
-        c = (p_forecast * 1)
+        c = p_forecast
 
         upper_constraint = np.tri(H, H) * eta
         lower_constraint = np.tri(H, H) * (-eta)
@@ -838,6 +849,9 @@ def _(H, R_max, alpha, eta, linprog, np):
         ])
         bounds = [(-alpha, alpha) for _ in range(n_vars)]
 
+        print(f"A_ub: {A_ub.shape}")
+        print(f"b_ub: {b_ub.shape}")
+    
         res = linprog(
             c=c,
             A_ub=A_ub,
@@ -894,7 +908,9 @@ def _(H, eta, n_controls, n_states, np, p, solve):
             f"h: {k}, u: {u_k:.2f}, r: {R_current:.2f}, p: {p_current:.2f}, "
             f"opt. obj: {profit:.2f}, obj.: {obj:.2f}, cum. obj.: {total_obj:.2f}"
         )
-    return obj_traj, u_traj, x_traj
+
+        break
+    return R_current, obj_traj, u_traj, x_traj
 
 
 @app.cell
@@ -923,14 +939,154 @@ def _(H, obj_traj, p, plt, u_traj, x_traj):
     return
 
 
-@app.cell
-def _(u):
-    u
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(
+        r"""
+    ## Sample average approximation
+
+    We need to stack..
+    """
+    )
     return
 
 
 @app.cell
-def _():
+def _(R_max, alpha, eta, linprog, np):
+    def solve_saa(R_current, p_forecast_samples):
+        import scipy
+    
+        n_samples, H, dim = p_forecast_samples.shape
+
+        n_vars = n_samples * H
+
+        # Coefficient vector is the forecasted prices
+        # Now in terms of the expected profit
+        c = (1 / n_samples) * p_forecast_samples.flatten()
+
+        upper_constraint = np.tri(H, H) * eta
+        lower_constraint = np.tri(H, H) * (-eta)
+
+        upper_blocks = [upper_constraint.copy() for _ in range(n_samples)]
+        lower_blocks = [lower_constraint.copy() for _ in range(n_samples)]
+
+        A_ub_upper = scipy.linalg.block_diag(*upper_blocks)
+        A_ub_lower = scipy.linalg.block_diag(*lower_blocks)
+        A_ub = np.vstack([A_ub_upper, A_ub_lower])
+
+        # A_ub = np.vstack([upper_constraint, lower_constraint])
+        b_ub = np.concatenate([
+            np.full(n_samples * H, R_max - R_current), # Upper constraint eval
+            np.full(n_samples * H, R_current) # Lower constraint eval
+        ])
+        bounds = [(-alpha, alpha) for _ in range(n_vars)]
+
+
+        n_na_constraints = n_samples - 1  # Number of non-anticipativity constraints
+        A_eq_na = np.zeros((n_na_constraints, n_vars))
+
+        for i in range(n_na_constraints):
+            # Constraint: u^i_0 - u^{i+1}_0 = 0
+            # Position of u^i_0 in the stacked vector: i * H + 0
+            # Position of u^{i+1}_0 in the stacked vector: (i+1) * H + 0
+            A_eq_na[i, i * H] = 1.0          # Coefficient for u^i_0
+            A_eq_na[i, (i + 1) * H] = -1.0   # Coefficient for u^{i+1}_0
+    
+        b_eq_na = np.zeros(n_na_constraints)
+    
+        print(f"c: {c.shape}")
+        print(f"A_ub_upper: {A_ub_upper.shape}")
+        print(f"A_ub: {A_ub.shape}")
+        print(f"b_ub: {b_ub.shape}")
+    
+        res = linprog(
+            c=c,
+            A_ub=A_ub,
+            b_ub=b_ub,
+            A_eq=A_eq_na,
+            b_eq=b_eq_na,
+            bounds=bounds,
+            method="highs"
+        )
+
+        return res
+    return (solve_saa,)
+
+
+app._unparsable_cell(
+    r"""
+    |# # Trajectories
+    # x_traj = np.zeros((H, n_states))
+    # u_traj = np.zeros((H, n_controls))
+    # obj_traj = np.zeros((H,))
+
+    # # Initial conditions
+    # R_current = 5.0
+    # p_current = p[0]
+    # total_obj = 0.0
+
+    for k in range(H):
+        p_forecast = p_sampled[k: H + k] # Includes the current price
+
+        out = solve_saa(R_current, p_forecast)
+
+        # profit = -out.fun
+        # u_opt = out.x
+
+        # Apply first control sequence
+        # u_k = u_opt[0]
+
+        # Compute contribution
+        # obj = objective(u_k, p_current)
+
+        # State transition
+        # R_current = R_current + (eta * u_k)
+        # p_current = p[k + 1]
+
+        # Cumulative reward
+        # total_obj += obj
+
+        # Track trajectories
+        # x_traj[k] = np.array([R_current, p_current])
+        # u_traj[k] = np.array([u_k])
+        # obj_traj[k] = total_obj
+
+        print(
+            f\"h: {k}, u: {u_k:.2f}, r: {R_current:.2f}, p: {p_current:.2f}, \"
+            f\"opt. obj: {profit:.2f}, obj.: {obj:.2f}, cum. obj.: {total_obj:.2f}\"
+        )
+
+        break
+    """,
+    name="_"
+)
+
+
+@app.cell
+def _(p_sampled):
+    p_sampled.flatten().shape
+    return
+
+
+@app.cell
+def _(H, N, R_current, p_sampled, solve_saa):
+    result = solve_saa(R_current, p_sampled)
+    print(-result.fun)
+
+    opt_x = result.x.reshape(N, H, 1)
+    opt_x
+    return
+
+
+@app.cell
+def _(N, np, p_sampled):
+    (1. / N) * p_sampled.flatten() @ np.random.normal(0, 1, (120,))
+    return
+
+
+@app.cell
+def _(p_sampled):
+    p_sampled.flatten()
     return
 
 
