@@ -816,14 +816,19 @@ def _(np, plt, rt_lmp):
 
 @app.cell
 def _(np, pl, rt_lmp):
-    N = 5
-    # Must have 24 measurements for reshaping
-    days = rt_lmp.group_by("day").count().filter(pl.col("count") == 24).to_series().sort().to_list()
-    sampled_days = np.random.choice(days, size=N, replace=False)
-    rt_lmp_sampled = rt_lmp.filter(pl.col("day").is_in(sampled_days)).sort("date")
-    p_sampled = rt_lmp_sampled.select("PJM RT LMP").to_numpy().flatten().reshape(N, 24, 1)
-    p_sampled.shape
-    return N, p_sampled
+    p_windows = (
+        rt_lmp.sort("date")
+        .select("PJM RT LMP")
+        .with_row_count("idx")
+        .with_columns(group=pl.col("idx") // 48)
+        .group_by("group")
+        .agg(pl.concat_list("PJM RT LMP").alias("window"))
+        .filter(pl.col("window").list.len() == 48)
+        .select("window")
+    )
+
+    p_sampled = np.array([np.array(w).reshape(48, 1) for w in p_windows["window"].to_list()])
+    return (p_sampled,)
 
 
 @app.function
@@ -851,7 +856,7 @@ def _(H, R_max, alpha, eta, linprog, np):
 
         print(f"A_ub: {A_ub.shape}")
         print(f"b_ub: {b_ub.shape}")
-    
+
         res = linprog(
             c=c,
             A_ub=A_ub,
@@ -908,34 +913,39 @@ def _(H, eta, n_controls, n_states, np, p, solve):
             f"h: {k}, u: {u_k:.2f}, r: {R_current:.2f}, p: {p_current:.2f}, "
             f"opt. obj: {profit:.2f}, obj.: {obj:.2f}, cum. obj.: {total_obj:.2f}"
         )
-
-        break
-    return R_current, obj_traj, u_traj, x_traj
+    return k, obj_traj, u_traj, x_traj
 
 
 @app.cell
-def _(H, obj_traj, p, plt, u_traj, x_traj):
-    fig, ax = plt.subplots(nrows=4, ncols=1, sharex=True, figsize=(14, 8))
+def _(H, p, plt):
+    def plot_trajectories(x_traj, u_traj, obj_traj):
+        fig, ax = plt.subplots(nrows=4, ncols=1, sharex=True, figsize=(14, 8))
+    
+        _xs = range(len(obj_traj))
+    
+        ax[0].step(_xs, obj_traj, label="Reward")
+        ax[1].step(_xs, u_traj, label="Buy/Sell")
+        ax[2].step(_xs, x_traj[:, 0], label="SoC")
+        ax[3].step(_xs, p[:H], label="Price")
+    
+        ax[0].set_ylabel("Cumulative Reward")
+        ax[1].set_ylabel("Power (Buy/Sell)")
+        ax[2].set_ylabel("Battery SoC")
+        ax[3].set_ylabel("Electricity Price")
+    
+        ax[0].legend()
+        ax[1].legend()
+        ax[2].legend()
+        ax[3].legend()
+    
+        plt.tight_layout()
+        plt.show()
+    return (plot_trajectories,)
 
-    _xs = range(len(obj_traj))
 
-    ax[0].step(_xs, obj_traj, label="Reward")
-    ax[1].step(_xs, u_traj, label="Buy/Sell")
-    ax[2].step(_xs, x_traj[:, 0], label="SoC")
-    ax[3].step(_xs, p[:H], label="Price")
-
-    ax[0].set_ylabel("Cumulative Reward")
-    ax[1].set_ylabel("Power (Buy/Sell)")
-    ax[2].set_ylabel("Battery SoC")
-    ax[3].set_ylabel("Electricity Price")
-
-    ax[0].legend()
-    ax[1].legend()
-    ax[2].legend()
-    ax[3].legend()
-
-    plt.tight_layout()
-    plt.show()
+@app.cell
+def _(obj_traj, plot_trajectories, u_traj, x_traj):
+    plot_trajectories(x_traj, u_traj, obj_traj)
     return
 
 
@@ -952,10 +962,45 @@ def _(mo):
 
 
 @app.cell
+def _(H, eta, np):
+    import scipy
+
+    uc = np.tri(H, H) * eta
+
+    ubs = [uc.copy() for _ in range(5)]
+
+    A_ub_up = scipy.linalg.block_diag(*ubs)
+
+    A_ub_up.shape
+    return A_ub_up, ubs
+
+
+@app.cell
+def _(ubs):
+    len(ubs), ubs[0].shape
+    return
+
+
+@app.cell
+def _(A_ub_up):
+    A_ub_up
+    return
+
+
+@app.cell
+def _(np):
+    A_eq_nant = np.zeros((5 - 1, 5 * 24))
+
+    for idx in range(5 - 1):
+        print(idx)
+    return
+
+
+@app.cell
 def _(R_max, alpha, eta, linprog, np):
     def solve_saa(R_current, p_forecast_samples):
         import scipy
-    
+
         n_samples, H, dim = p_forecast_samples.shape
 
         n_vars = n_samples * H
@@ -970,6 +1015,7 @@ def _(R_max, alpha, eta, linprog, np):
         upper_blocks = [upper_constraint.copy() for _ in range(n_samples)]
         lower_blocks = [lower_constraint.copy() for _ in range(n_samples)]
 
+        # Each diagonal block contains the constraints for _this_ sample
         A_ub_upper = scipy.linalg.block_diag(*upper_blocks)
         A_ub_lower = scipy.linalg.block_diag(*lower_blocks)
         A_ub = np.vstack([A_ub_upper, A_ub_lower])
@@ -982,7 +1028,8 @@ def _(R_max, alpha, eta, linprog, np):
         bounds = [(-alpha, alpha) for _ in range(n_vars)]
 
 
-        n_na_constraints = n_samples - 1  # Number of non-anticipativity constraints
+        # Build non-anticipativity constraints
+        n_na_constraints = n_samples - 1 
         A_eq_na = np.zeros((n_na_constraints, n_vars))
 
         for i in range(n_na_constraints):
@@ -991,14 +1038,15 @@ def _(R_max, alpha, eta, linprog, np):
             # Position of u^{i+1}_0 in the stacked vector: (i+1) * H + 0
             A_eq_na[i, i * H] = 1.0          # Coefficient for u^i_0
             A_eq_na[i, (i + 1) * H] = -1.0   # Coefficient for u^{i+1}_0
-    
+
         b_eq_na = np.zeros(n_na_constraints)
-    
-        print(f"c: {c.shape}")
-        print(f"A_ub_upper: {A_ub_upper.shape}")
-        print(f"A_ub: {A_ub.shape}")
-        print(f"b_ub: {b_ub.shape}")
-    
+
+        # print(f"c: {c.shape}")
+        # print(f"A_ub: {A_ub.shape}")
+        # print(f"b_ub: {b_ub.shape}")
+        # print(f"A_eq: {A_eq_na.shape}")
+        # print(f"b_eq: {b_eq_na.shape}")
+
         res = linprog(
             c=c,
             A_ub=A_ub,
@@ -1013,80 +1061,69 @@ def _(R_max, alpha, eta, linprog, np):
     return (solve_saa,)
 
 
-app._unparsable_cell(
-    r"""
-    |# # Trajectories
-    # x_traj = np.zeros((H, n_states))
-    # u_traj = np.zeros((H, n_controls))
-    # obj_traj = np.zeros((H,))
+@app.cell
+def _(p_sampled):
+    p_sampled.shape
+    return
 
-    # # Initial conditions
-    # R_current = 5.0
-    # p_current = p[0]
-    # total_obj = 0.0
 
-    for k in range(H):
-        p_forecast = p_sampled[k: H + k] # Includes the current price
+@app.cell
+def _(
+    H,
+    eta,
+    k,
+    n_controls,
+    n_states,
+    np,
+    p,
+    p_sampled,
+    plot_trajectories,
+    solve_saa,
+):
+    # Trajectories
+    _x_traj = np.zeros((H, n_states))
+    _u_traj = np.zeros((H, n_controls))
+    _obj_traj = np.zeros((H,))
 
-        out = solve_saa(R_current, p_forecast)
+    # Initial conditions
+    _R_current = 5.0
+    _p_current = p[0]
+    _total_obj = 0.0
 
-        # profit = -out.fun
-        # u_opt = out.x
+    for _k in range(H):
+
+        _p_forecast = p_sampled[:, _k: H + _k]
+
+        _out = solve_saa(_R_current, _p_forecast)
+
+        _profit = -_out.fun
+        _u_opt = _out.x
 
         # Apply first control sequence
-        # u_k = u_opt[0]
+        u_k_opt = _u_opt[0]
 
         # Compute contribution
-        # obj = objective(u_k, p_current)
+        _obj = objective(u_k_opt, _p_current)
 
         # State transition
-        # R_current = R_current + (eta * u_k)
-        # p_current = p[k + 1]
+        _R_current = _R_current + (eta * u_k_opt)
+        _p_current = p[k + 1] # Should be actual observation
 
         # Cumulative reward
-        # total_obj += obj
+        _total_obj += _obj
 
         # Track trajectories
-        # x_traj[k] = np.array([R_current, p_current])
-        # u_traj[k] = np.array([u_k])
-        # obj_traj[k] = total_obj
+        _x_traj[_k] = np.array([_R_current, _p_current])
+        _u_traj[_k] = np.array([u_k_opt])
+        _obj_traj[_k] = _total_obj
 
         print(
-            f\"h: {k}, u: {u_k:.2f}, r: {R_current:.2f}, p: {p_current:.2f}, \"
-            f\"opt. obj: {profit:.2f}, obj.: {obj:.2f}, cum. obj.: {total_obj:.2f}\"
+            f"h: {_k}, u: {u_k_opt:.2f}, r: {_R_current:.2f}, p: {_p_current:.2f}, "
+            f"opt. obj: {_profit:.2f}, obj.: {_obj:.2f}, cum. obj.: {_total_obj:.2f}"
         )
 
-        break
-    """,
-    name="_"
-)
 
-
-@app.cell
-def _(p_sampled):
-    p_sampled.flatten().shape
-    return
-
-
-@app.cell
-def _(H, N, R_current, p_sampled, solve_saa):
-    result = solve_saa(R_current, p_sampled)
-    print(-result.fun)
-
-    opt_x = result.x.reshape(N, H, 1)
-    opt_x
-    return
-
-
-@app.cell
-def _(N, np, p_sampled):
-    (1. / N) * p_sampled.flatten() @ np.random.normal(0, 1, (120,))
-    return
-
-
-@app.cell
-def _(p_sampled):
-    p_sampled.flatten()
+    plot_trajectories(_x_traj, _u_traj, _obj_traj)
     return
 
 
